@@ -11,6 +11,9 @@
 #            :
 # TODO       : 更新新xml文件功能尚未开发
 #            :
+# Note       : 目前搜集了用户修改属性在列表中的位置信息，目前尚未用到，以后可能
+#            : 会使用到，暂时保留该部分代码
+#            :
 # History    : 2018-08-18 Liu Gefeng   数组多行问题解决
 #            : 2018-08-18 Liu Gefeng   旧xml文件扫描功能开发完毕
 # =========================================================================
@@ -93,6 +96,10 @@ class SourceXmlFile:
 
                 owner = match.group(2)
                 if owner == self.trans_owner:
+                    # 多个修改段落之间用空格隔开
+                    if len(self.lst_trans) > 0:
+                        self.lst_trans.append("\n")
+
                     scan_state = self.SCAN_STATE_MINE
                     continue
 
@@ -191,10 +198,10 @@ python trans.py owner source_path target_path
     source_file = SourceXmlFile(source_path, owner)
     source_file.parse()
 
-    # str = ""
-    # for item in source_file.lst_trans:
-    #     str += item 
+    str = ""
+    for item in source_file.lst_trans:
+        str += item 
 
-    # print(str)
-    # print(source_file.map_trans)
+    print(str)
+    print(source_file.map_trans)
 
