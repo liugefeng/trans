@@ -9,6 +9,8 @@
 #            : 脚本首先搜索符合用户owner的添加的所有字符串，然后这些字符串
 #            : 去更新新平台的字符串(新平台没有的则添加，已有的则更新)
 #            :
+# TODO       : 数组不同于普通属性，一般使用多行表示，需要针对性处理
+#            :
 # History    : 2018-08-12 Liu Gefeng   功能基本完成
 #            : 2018-08-12 Liu Gefeng   解决下载完毕未退出ftp问题
 #            : 2018-08-12 Liu Gefeng   解决下载最后一次上传文件问题
@@ -38,8 +40,12 @@ class XmlFile:
         self.map_trans = {}
 
         # 扫描状态定义
+        # 1: 当前正在查找匹配起始行 如：<!-- BSP: add by xxx @{ -->
+        # 2: 当前正在搜集用户修改属性行并查找匹配结束行 如：<!-- BSP: @} -->
+        # 3: 当前正在搜集用户属性信息，遇到当前为数组的需要进行多行处理情况
         self.SCAN_STATE_NORMAL = 0
         self.SCAN_STATE_MINE   = 1
+        self.SCAN_STATE_ARRAY  = 2
 
     # 扫描xml文件，获取个人字符串移植信息
     def parse(self):
@@ -55,6 +61,21 @@ class XmlFile:
         # <!-- BSP: @} --> or <!-- @} --> 
         re_match_end = re.compile(r'^\s*<!\-\-.*@\}\s*\-\->\s*$')
 
+        # 普通属性匹配
+        # <string name="status_bar_accessibility_dismiss_recents">Dismiss recent apps</string>
+        re_plain_property = re.compile(r'\s*\<\s*([\w\-]+)\s+name\s*="([^\"]+)".*</([\w\-]+)>\s*$')
+
+        # 数组属性
+        #<plurals name="status_bar_accessibility_recent_apps">
+        #    <item quantity="one">1 screen in Overview</item>
+        #    <item quantity="other">%d screens in Overview</item>
+        #</plurals>
+        re_match_array_begin = re.compile(r'^\s*<([\w\-]+)\s+name="([^"]+)\"[^/]?>\s*$')
+
+        # </plurals>
+        re_match_array_end = re.compile(r'^\s*</[^>]+\s*>\s*$')
+
+        cur_array_name = ""
         while True:
             line_text = file_id.readline()
 
@@ -83,9 +104,52 @@ class XmlFile:
                 match = re_match_end.search(line_text)
                 if not match:
                     self.lst_trans.append(line_text) 
+
+                    # 普通属性匹配
+                    sub_match = re_plain_property.search(line_text)
+
+                    if sub_match:
+                        prop_type = sub_match.group(1).strip()
+                        prop_name = sub_match.group(2).strip()
+
+                        if not prop_name in self.map_trans:
+                            self.map_trans[prop_name] = str(len(self.lst_trans) - 1)
+                        else:
+                            print("repeat property found about " + prop_name)
+
+                        continue
+
+                    # 数组属性匹配
+                    sub_match = re_match_array_begin.search(line_text)
+                    if sub_match:
+                        prop_name = sub_match.group(2)
+
+                        if not prop_name in self.map_trans:
+                            cur_array_name = prop_name
+                            scan_state = self.SCAN_STATE_ARRAY
+                            self.map_trans[prop_name] = str(len(self.lst_trans) - 1)
+                        else:
+                            print("repeat property found about array " + prop_name)
+
+                        continue
+
+                    continue
+
+                # 找到用户修改字符串结束行
+                # <!-- BSP: @} -->
+                scan_state = self.SCAN_STATE_NORMAL
+                continue
+
+            # 搜集数组元素，并查找数组结束行
+            if scan_state == self.SCAN_STATE_ARRAY:
+                self.lst_trans.append(line_text)
+
+                match = re_match_array_end.search(line_text)
+                if not match:
                     continue
 
                 scan_state = self.SCAN_STATE_NORMAL
+                self.map_trans[cur_array_name] = self.map_trans[cur_array_name] + "," + str(len(self.lst_trans) - 1)
                 continue
 
         file_id.close() 
@@ -125,4 +189,5 @@ python trans.py owner source_path target_path
         str += item 
 
     print(str)
+    print(source_file.map_trans)
 
