@@ -6,30 +6,28 @@
 # Create Date: 2018-08-19
 # platform   : Linux/Windows
 # Comment    : 该脚本主要用于android平台升级字符串移植
-#            : 脚本首先搜索符合用户owner的添加的所有字符串，然后这些字符串
+#            : 脚本首先搜索符合用户owner的添加的所有字符串，然后用这些字符串
 #            : 去更新新平台的字符串(新平台没有的则添加，已有的则更新)
 #            :
-# TODO       : 数组不同于普通属性，一般使用多行表示，需要针对性处理
+# TODO       : 更新新xml文件功能尚未开发
 #            :
-# History    : 2018-08-12 Liu Gefeng   功能基本完成
-#            : 2018-08-12 Liu Gefeng   解决下载完毕未退出ftp问题
-#            : 2018-08-12 Liu Gefeng   解决下载最后一次上传文件问题
-#            : 2018-08-15 Liu Gefeng   去除download函数
-#            : 2018-08-17 Liu Gefeng   修改只能下载当天最新文件问题
-#            : 2018-08-17 Liu Gefeng   日期兼容python 2.7
+# History    : 2018-08-18 Liu Gefeng   数组多行问题解决
+#            : 2018-08-18 Liu Gefeng   旧xml文件扫描功能开发完毕
 # =========================================================================
 
 import sys
 import re
 import os
 import os.path
-import time
 import platform
-from datetime import date
 
 PLATFORM = platform.system()
 
-class XmlFile:
+# =========================================================================
+# Class  : SourceXmlFile
+# Comment: 扫描指定文件中指定owner修改信息(用来后续更新到新xml文件中)
+# =========================================================================
+class SourceXmlFile:
     def __init__(self, xmlFile, transOwner):
         # xml文件位置
         self.path = xmlFile.strip()
@@ -47,7 +45,10 @@ class XmlFile:
         self.SCAN_STATE_MINE   = 1
         self.SCAN_STATE_ARRAY  = 2
 
-    # 扫描xml文件，获取个人字符串移植信息
+    # =========================================================================
+    # Function: parse
+    # Comment: 扫描xml文件，获取个人字符串移植信息
+    # =========================================================================
     def parse(self):
         file_id = open(self.path, 'r')
         scan_state = self.SCAN_STATE_NORMAL
@@ -92,7 +93,6 @@ class XmlFile:
 
                 owner = match.group(2)
                 if owner == self.trans_owner:
-                    print("owner: " + owner)
                     scan_state = self.SCAN_STATE_MINE
                     continue
 
@@ -153,6 +153,10 @@ class XmlFile:
                 continue
 
         file_id.close() 
+        if scan_state != self.SCAN_STATE_NORMAL:
+            print("scan state error for scanning file " + self.path)
+        else:
+            print("file " + self.path + " scan finished.")
 
 # =============================================================================
 # usage : 
@@ -170,24 +174,27 @@ python trans.py owner source_path target_path
 
     # parameter check
     owner = sys.argv[1].strip()
+    print("owner: " + owner)
 
     source_path = sys.argv[2].strip()
     if not os.path.exists(source_path):
         print("old source path not found!")
         exit()
+    print("source path: " + source_path)
 
     target_path = sys.argv[3].strip()
     if not os.path.exists(target_path):
         print("new source path not found!")
         exit()
+    print("target path: " + target_path)
 
-    source_file = XmlFile(source_path, owner)
+    source_file = SourceXmlFile(source_path, owner)
     source_file.parse()
 
-    str = ""
-    for item in source_file.lst_trans:
-        str += item 
+    # str = ""
+    # for item in source_file.lst_trans:
+    #     str += item 
 
-    print(str)
-    print(source_file.map_trans)
+    # print(str)
+    # print(source_file.map_trans)
 
