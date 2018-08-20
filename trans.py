@@ -8,6 +8,11 @@
 # Comment    : 该脚本主要用于android平台升级字符串移植
 #            : 脚本首先搜索符合用户owner的添加的所有字符串，然后用这些字符串
 #            : 去更新新平台的字符串(新平台没有的则添加，已有的则更新)
+#            : 新xml文件更新方式：
+#            : 1. 针对新xml文件中已有的元素行，删除已有行，使用旧xml文件中的内容
+#            : 2. 针对新文件中没有的元素，则直接将旧xml文件中的内容加入到新xml
+#            : 3. 更新内容将同意放在文件中的同一个注释标记对中
+#            : 4. 针对新文件中已有修改内容，不能进行修改
 #            :
 # TODO       : 更新新xml文件功能尚未开发
 #            :
@@ -47,6 +52,33 @@ class SourceXmlFile:
         self.SCAN_STATE_NORMAL = 0
         self.SCAN_STATE_MINE   = 1
         self.SCAN_STATE_ARRAY  = 2
+
+    # =========================================================================
+    # Function: parse
+    # Comment: 扫描xml文件，获取个人字符串移植信息
+    # =========================================================================
+    def generateEmptyXmlFile(self):
+        file_id = open(self.path, 'r')
+        if not file_id:
+            print("failed to open source file " + self.path + " to generate empty xml file.")
+            return ""
+
+        # <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+        re_resource_start = re.compile(r'^\s*<resources\s+.*>\s*$')
+        result = ""
+
+        while True:
+            line_text = file_id.readline()
+            if not line_text:
+                break
+
+            result = result + line_text
+            match = re_resource_start.search(line_text)
+            if match:
+                break
+
+        file_id.close()
+        return result
 
     # =========================================================================
     # Function: parse
@@ -162,8 +194,45 @@ class SourceXmlFile:
         file_id.close() 
         if scan_state != self.SCAN_STATE_NORMAL:
             print("scan state error for scanning file " + self.path)
-        else:
-            print("file " + self.path + " scan finished.")
+        return
+
+class TargetXmlFile:
+    def __init__(self, xmlFile, sourceXmlFile):
+        self.path = xmlFile.strip()
+        self.source_xml_file = sourceXmlFile
+
+    # =========================================================================
+    # Function : parse
+    # Comment  : 根据source xml文件生成target xml文件
+    # Condition: 新xml文件不存在
+    # =========================================================================
+    def generateTargetFile(self):
+        # 创建文件
+        file_id = open(self.path, 'w')
+        if not file_id:
+            print("failed to create file " + self.path + ".")
+            return
+
+        # 获取空xml文件模板内容
+        result = self.source_xml_file.generateEmptyXmlFile()
+
+        # 加入更新内容
+        result = result + "    <!-- BSP: add by " + self.source_xml_file.trans_owner  +  "\n"
+        for line_text in self.source_xml_file.lst_trans:
+            result = result + line_text
+
+        result = result + "    <!-- BSP: @} -->\n"
+
+        # 加入resources结尾标志
+        result = result + "</resources>\n"
+
+        file_id.write(result)
+        file_id.close()
+
+    def scanTargetFile(self):
+        # 文件不存在，(xxxxx 后续要进行专门处理)
+        if not os.path.exists(self.path):
+            return
 
 # =============================================================================
 # usage : 
@@ -198,10 +267,6 @@ python trans.py owner source_path target_path
     source_file = SourceXmlFile(source_path, owner)
     source_file.parse()
 
-    str = ""
-    for item in source_file.lst_trans:
-        str += item 
-
-    print(str)
-    print(source_file.map_trans)
+    target_file = TargetXmlFile(target_path, source_file)
+    target_file.generateTargetFile()
 
