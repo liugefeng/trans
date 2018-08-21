@@ -229,10 +229,118 @@ class TargetXmlFile:
         file_id.write(result)
         file_id.close()
 
-    def scanTargetFile(self):
-        # 文件不存在，(xxxxx 后续要进行专门处理)
-        if not os.path.exists(self.path):
-            return
+    # =========================================================================
+    # Function : updateTargetFile
+    # Comment  : 根据source xml文件中获取的属于owner的更新信息，更新target xml文件
+    # Condition: 新xml文件已经存在
+    # Note     : 更新规则：
+    #          : 1. 针对新文件中的已有元素: 
+    #          :    a) 元素为原生信息，则使用source文件的信息
+    #          :    b) 元素为修改过的信息，则不更新该元素信息
+    #          : 2. 针对新文件中不存在的元素，则直接增加source文件中的信息
+    #          : 
+    # =========================================================================
+    def updateTargetFile(self):
+        file_id = open(self.path, 'r')
+        line_text = ""
+        result = ""
+
+        # 扫描状态
+        SCAN_STATE_NORMAL = 0
+        SCAN_STATE_PROPERTY = 1
+        SCAN_STATE_ARRAY = 2
+        SCAN_STATE_UPDATE = 3
+        SCAN_STATE_END = 4
+
+        # <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+        re_resource_start = re.compile(r'^\s*<resources\s+.*>\s*$')
+
+        # <!-- BSP: add by xxx @{ -->
+        # <!-- Product: add by xxx @{ -->
+        # <!-- Vision: add by xxx @{ -->
+        modify_start_pattern = r'\s*<!\-\-\s*(bsp|product|vision)\s*:\s*.*by\s+(\w+)\s+.*@\{\s*\-\->\s*$'
+        re_modify_start = re.compile(match_start_pattern, flags=re.IGNORECASE)
+
+        # <!-- BSP: @} --> or <!-- @} --> 
+        re_modify_end = re.compile(r'^\s*<!\-\-.*@\}\s*\-\->\s*$')
+
+        # 普通属性匹配
+        # <string name="status_bar_accessibility_dismiss_recents">Dismiss recent apps</string>
+        re_plain_property = re.compile(r'\s*\<\s*([\w\-]+)\s+name\s*="([^\"]+)".*</([\w\-]+)>\s*$')
+
+        # 数组属性
+        #<plurals name="status_bar_accessibility_recent_apps">
+        #    <item quantity="one">1 screen in Overview</item>
+        #    <item quantity="other">%d screens in Overview</item>
+        #</plurals>
+        re_match_array_begin = re.compile(r'^\s*<([\w\-]+)\s+name="([^"]+)\"[^/]?>\s*$')
+
+        # </plurals>
+        re_match_array_end = re.compile(r'^\s*</[^>]+\s*>\s*$')
+
+        # </resources>
+        re_resource_end = re.compile(r'^\s*</resources>\s*$')
+
+        scan_state = SCAN_STATE_NORMAL
+        while True:
+            line_text = file_id.readline()
+            if not line_text:
+                break
+
+            # 开始扫描，查找resource起始标记
+            if scan_state == SCAN_STATE_NORMAL: 
+                result = result + line_text
+                match = re_resource_start.search(line_text)
+
+                if match:
+                    scan_state = SCAN_STATE_NORMAL
+                    break
+
+                continue
+
+            # 扫描元素部分内容
+            if scan_state == SCAN_STATE_PROPERTY:
+                # 更新部分起始位置匹配
+                match = re_modify_start.search(line_text)
+                if match:
+                    scan_state = SCAN_STATE_UPDATE
+                    result = result + line_text
+                    continue
+
+                # 普通元素匹配
+                match = re_plain_property.search(line_text)
+                if match:
+                    prop_name = match.group(2)
+                    if prop_name in self.source_xml_file.map_trans:
+                        self.source_xml_file.map_trans[prop_name] = "-1"
+                        continue
+                    else:
+                        result = result + line_text
+
+                    continue
+
+                # 数组元素匹配
+                match = re_match_array_begin.search(line_text)
+                if match:
+                    scan_state = SCAN_STATE_ARRAY 
+                    array_name = match.group(2)
+                    if array_name in self.source_xml_file.map_trans:
+                        self.source_xml_file.map_trans[array_name] = "-1"
+                    else:
+                        result = result + line_text
+                    continue
+
+                # </resources>匹配
+                match = re_resource_end.search(line_text) 
+                if match:
+                    scan_state = SCAN_STATE_END
+                    result = result + line_text
+                    continue
+
+                # 其他情况
+                result = result + line_text
+
+        file_id.close()
 
 # =============================================================================
 # usage : 
