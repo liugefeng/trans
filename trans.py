@@ -21,6 +21,7 @@
 #            :
 # History    : 2018-08-18 Liu Gefeng   数组多行问题解决
 #            : 2018-08-18 Liu Gefeng   旧xml文件扫描功能开发完毕
+#            : 2018-08-23 Liu Gefeng   代码重构，将正则匹配和行类型内容转为全局变量
 # =========================================================================
 
 import sys
@@ -30,6 +31,119 @@ import os.path
 import platform
 
 PLATFORM = platform.system()
+
+# =========================================================================
+# Comment: 常量定义
+# =========================================================================
+# 元素类型0: 非元素行, 1: 普通元素行, 2: 数组元素行
+PROP_TYPE_NONE = 0
+PROP_TYPE_PLAIN = 1
+PROP_TYPE_ARRAY_START = 2
+PROP_TYPE_ARRAY_END = 3
+PROP_TYPE_ARRAY_ITEM = 4
+PROP_TYPE_CUSTOM_START = 5
+PROP_TYPE_CUSTOM_END = 6
+PROP_TYPE_CUSTOM_RESOURCE_START = 7
+PROP_TYPE_CUSTOM_RESOURCE_END = 8
+
+# 普通属性匹配
+# <string name="status_bar_accessibility_dismiss_recents">Dismiss recent apps</string>
+re_plain_property = re.compile(r'\s*\<\s*([\w\-]+)\s+name\s*="([^\"]+)".*</([\w\-]+)>\s*$')
+
+# 数组属性
+#<plurals name="status_bar_accessibility_recent_apps">
+#    <item quantity="one">1 screen in Overview</item>
+#    <item quantity="other">%d screens in Overview</item>
+#</plurals>
+re_array_begin = re.compile(r'^\s*<([\w\-]+)\s+name="([^"]+)\"[^/]?>\s*$')
+
+# </plurals>
+re_array_end = re.compile(r'^\s*</([^>]+)>\s*$')
+
+# <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+re_resource_start = re.compile(r'^\s*<resources\s+.*>\s*$')
+
+# </resources>
+re_resource_end = re.compile(r'^\s*</resources>\s*$')
+
+# <!-- BSP: add by xxx @{ -->
+# <!-- Product: add by xxx @{ -->
+# <!-- Vision: add by xxx @{ -->
+match_start_pattern = r'^\s*<!\-\-\s*(bsp|product|vision)\s*:\s*.*by\s+(\w+)\s+.*@\{\s*\-\->\s*$'
+re_match_start = re.compile(match_start_pattern, flags=re.IGNORECASE)
+
+# <!-- BSP: @} --> or <!-- @} --> 
+re_match_end = re.compile(r'^\s*<!\-\-.*@\}\s*\-\->\s*$')
+
+# 获取source xml属性更改内容扫描状态定义
+# 1: 当前正在查找匹配起始行 如：<!-- BSP: add by xxx @{ -->
+# 2: 当前正在搜集用户修改属性行并查找匹配结束行 如：<!-- BSP: @} -->
+# 3: 当前正在搜集用户属性信息，遇到当前为数组的需要进行多行处理情况
+SOURCE_SCAN_STATE_NORMAL = 0
+SOURCE_SCAN_STATE_MINE   = 1
+SOURCE_SCAN_STATE_ARRAY  = 2
+
+# target xml扫描状态
+# 0: 起始状态 1: 匹配属性状态 2: 匹配非修改属性状态
+TARGET_SCAN_STATE_NORMAL = 0
+TARGET_SCAN_STATE_PROPERTY = 1
+TARGET_SCAN_STATE_ARRAY_NONE_UPDATE = 2
+TARGET_SCAN_STATE_UPDATE = 3
+TARGET_SCAN_STATE_END = 4
+
+# =========================================================================
+# Function : parseCurLine
+# Comment  : 解析当前文本行内容，并返回当前行类型和属性名称(有的话)
+# Return   : 属性类型、属性名称
+# =========================================================================
+def parseCurLine(line_text):
+    # 参数合法性检查
+    if not line_text:
+        return PROP_TYPE_NONE, ""
+
+    # 是否为普通属性
+    match = re_plain_property.search(line_text)
+    if match:
+        prop_name = match.group(2).strip()
+        return PROP_TYPE_PLAIN, prop_name
+
+    # 是否为数组类型 
+    match = re_array_begin.search(line_text)
+    if match:
+        prop_name = match.group(2).strip()
+        return PROP_TYPE_ARRAY_START, prop_name
+
+    # 书否为数组结束行
+    match = re_array_end.search(line_text)
+    if match:
+        prop_name = match.group(1).strip()
+        if prop_name != "resources":
+            return PROP_TYPE_ARRAY_END, prop_name
+
+    # 修改注释起始行
+    # <!--BSP: add by xxx @{ -->
+    match = re_match_start.search(line_text)
+    if match:
+        return PROP_TYPE_CUSTOM_START, ""
+
+    # 修改注释结束行
+    # 如 <!-- BSP: @} -->
+    match = re_match_end.search(line_text)
+    if match:
+        return PROP_TYPE_CUSTOM_END, ""
+
+    # <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    match = re_resource_start.search(line_text)
+    if match:
+        return PROP_TYPE_CUSTOM_RESOURCE_START, "" 
+
+    # </resources>
+    match = re_resource_end.search(line_text)
+    if match:
+        return PROP_TYPE_CUSTOM_RESOURCE_END, "" 
+
+    # 其他类型(非元素相关行, 不包括数组内容部元素行)
+    return PROP_TYPE_NONE, ""
 
 # =========================================================================
 # Class  : SourceXmlFile
@@ -45,17 +159,10 @@ class SourceXmlFile:
         self.lst_trans = []
         self.map_trans = {}
 
-        # 扫描状态定义
-        # 1: 当前正在查找匹配起始行 如：<!-- BSP: add by xxx @{ -->
-        # 2: 当前正在搜集用户修改属性行并查找匹配结束行 如：<!-- BSP: @} -->
-        # 3: 当前正在搜集用户属性信息，遇到当前为数组的需要进行多行处理情况
-        self.SCAN_STATE_NORMAL = 0
-        self.SCAN_STATE_MINE   = 1
-        self.SCAN_STATE_ARRAY  = 2
-
     # =========================================================================
-    # Function: parse
-    # Comment: 扫描xml文件，获取个人字符串移植信息
+    # Function: generateEmptyXmlFile
+    # Comment : 如果target xml不存在，则根据source xml生成空文件, 然后将修改信息
+    #         : 写入文件中
     # =========================================================================
     def generateEmptyXmlFile(self):
         file_id = open(self.path, 'r')
@@ -63,21 +170,20 @@ class SourceXmlFile:
             print("failed to open source file " + self.path + " to generate empty xml file.")
             return ""
 
-        # <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-        re_resource_start = re.compile(r'^\s*<resources\s+.*>\s*$')
         result = ""
 
-        while True:
-            line_text = file_id.readline()
-            if not line_text:
-                break
+        # 一次性读取文件内容到列表中
+        lst_lines = file_id.readlines()
+        file_id.close()
 
+        # 获取修改信息
+        for line_text in lst_lines:
             result = result + line_text
             match = re_resource_start.search(line_text)
             if match:
                 break
 
-        file_id.close()
+        del lst_lines[:]
         return result
 
     # =========================================================================
@@ -86,120 +192,121 @@ class SourceXmlFile:
     # =========================================================================
     def parse(self):
         file_id = open(self.path, 'r')
-        scan_state = self.SCAN_STATE_NORMAL
+        if not file_id:
+            print("failed to open file " + self.path + " to read.")
+            return
 
-        # <!-- BSP: add by xxx @{ -->
-        # <!-- Product: add by xxx @{ -->
-        # <!-- Vision: add by xxx @{ -->
-        match_start_pattern = r'\s*<!\-\-\s*(bsp|product|vision)\s*:\s*.*by\s+(\w+)\s+.*@\{\s*\-\->\s*$'
-        re_match_start = re.compile(match_start_pattern, flags=re.IGNORECASE)
+        lst_lines = file_id.readlines()
+        file_id.close()
 
-        # <!-- BSP: @} --> or <!-- @} --> 
-        re_match_end = re.compile(r'^\s*<!\-\-.*@\}\s*\-\->\s*$')
-
-        # 普通属性匹配
-        # <string name="status_bar_accessibility_dismiss_recents">Dismiss recent apps</string>
-        re_plain_property = re.compile(r'\s*\<\s*([\w\-]+)\s+name\s*="([^\"]+)".*</([\w\-]+)>\s*$')
-
-        # 数组属性
-        #<plurals name="status_bar_accessibility_recent_apps">
-        #    <item quantity="one">1 screen in Overview</item>
-        #    <item quantity="other">%d screens in Overview</item>
-        #</plurals>
-        re_match_array_begin = re.compile(r'^\s*<([\w\-]+)\s+name="([^"]+)\"[^/]?>\s*$')
-
-        # </plurals>
-        re_match_array_end = re.compile(r'^\s*</[^>]+\s*>\s*$')
-
+        scan_state = SOURCE_SCAN_STATE_NORMAL
+        last_scan_state = SOURCE_SCAN_STATE_NORMAL
         cur_array_name = ""
-        while True:
-            line_text = file_id.readline()
-
-            # 文件读取完毕
-            if not line_text:
-                break
+        line_no = 0
+        for line_text in lst_lines:
+            line_no = line_no + 1
 
             # 当前状态为查找个人翻译字符串起始位置
             # 如：<!-- BSP: add by liugefeng @{ -->
-            if scan_state == self.SCAN_STATE_NORMAL:
-                match = re_match_start.search(line_text)
-                if not match:
-                    continue
-
-                owner = match.group(2)
-                if owner == self.trans_owner:
+            if scan_state == SOURCE_SCAN_STATE_NORMAL:
+                line_type, prop_name = parseCurLine(line_text)
+                if line_type == PROP_TYPE_CUSTOM_START: 
                     # 多个修改段落之间用空格隔开
                     if len(self.lst_trans) > 0:
                         self.lst_trans.append("\n")
 
-                    scan_state = self.SCAN_STATE_MINE
+                    if last_scan_state != scan_state:
+                        last_scan_state = scan_state
+
+                    scan_state = SOURCE_SCAN_STATE_MINE
                     continue
 
                 continue
 
             # 当前状态为已经匹配到翻译字符串起始位置，记录当前翻译串
             # 匹配到<!-- BSP: @} --> 结束
-            if scan_state == self.SCAN_STATE_MINE:
-                match = re_match_end.search(line_text)
-                if not match:
-                    self.lst_trans.append(line_text) 
+            if scan_state == SOURCE_SCAN_STATE_MINE:
+                line_type, prop_name = parseCurLine(line_text)
 
-                    # 普通属性匹配
-                    sub_match = re_plain_property.search(line_text)
+                # 找到匹配结束，则重新进入NORMAL状态
+                if line_type == PROP_TYPE_CUSTOM_END: 
+                    if last_scan_state != scan_state:
+                        last_scan_state = scan_state
 
-                    if sub_match:
-                        prop_type = sub_match.group(1).strip()
-                        prop_name = sub_match.group(2).strip()
+                    scan_state = SOURCE_SCAN_STATE_NORMAL
+                    continue
 
-                        if not prop_name in self.map_trans:
-                            self.map_trans[prop_name] = str(len(self.lst_trans) - 1)
-                        else:
-                            print("repeat property found about " + prop_name)
+                self.lst_trans.append(line_text) 
 
+                # 当前行为普通元素
+                if line_type == PROP_TYPE_PLAIN:
+                    if not prop_name:
+                        print("prop name null for line " + str(line_no))
                         continue
 
-                    # 数组属性匹配
-                    sub_match = re_match_array_begin.search(line_text)
-                    if sub_match:
-                        prop_name = sub_match.group(2)
-
-                        if not prop_name in self.map_trans:
-                            cur_array_name = prop_name
-                            scan_state = self.SCAN_STATE_ARRAY
-                            self.map_trans[prop_name] = str(len(self.lst_trans) - 1)
-                        else:
-                            print("repeat property found about array " + prop_name)
-
-                        continue
+                    if not prop_name in self.map_trans:
+                        self.map_trans[prop_name] = str(len(self.lst_trans) - 1)
+                    else:
+                        print("repeat property found about " + prop_name)
 
                     continue
 
-                # 找到用户修改字符串结束行
-                # <!-- BSP: @} -->
-                scan_state = self.SCAN_STATE_NORMAL
-                continue
+                # 当前行为数组元素
+                if line_type == PROP_TYPE_ARRAY_START:
+                    if not prop_name:
+                        print("prop name null for line " + str(line_no))
+                        continue
+
+                    if not prop_name in self.map_trans:
+                        cur_array_name = prop_name
+
+                        if last_scan_state != scan_state:
+                            last_scan_state = scan_state
+
+                        scan_state = SOURCE_SCAN_STATE_ARRAY
+                        self.map_trans[prop_name] = str(len(self.lst_trans) - 1)
+                    else:
+                        print("repeat property found about array " + prop_name + " on line " + str(line_no))
+                    continue
 
             # 搜集数组元素，并查找数组结束行
-            if scan_state == self.SCAN_STATE_ARRAY:
+            if scan_state == SOURCE_SCAN_STATE_ARRAY:
+                line_type, prop_name = parseCurLine(line_text)
                 self.lst_trans.append(line_text)
 
-                match = re_match_array_end.search(line_text)
-                if not match:
+                if line_type != PROP_TYPE_ARRAY_END:
                     continue
 
-                scan_state = self.SCAN_STATE_NORMAL
-                self.map_trans[cur_array_name] = self.map_trans[cur_array_name] + "," + str(len(self.lst_trans) - 1)
+                last_scan_state, scan_state = scan_state, last_scan_state 
+
+                if cur_array_name and cur_array_name in self.map_trans:
+                    self.map_trans[cur_array_name] = self.map_trans[cur_array_name] + "," + str(len(self.lst_trans) - 1)
+                    cur_array_name = ""
+
                 continue
 
-        file_id.close() 
-        if scan_state != self.SCAN_STATE_NORMAL:
+        if scan_state != SOURCE_SCAN_STATE_NORMAL:
             print("scan state error for scanning file " + self.path)
         return
+
+    # =========================================================================
+    # Function : clear
+    # Comment  : 清空数据
+    # =========================================================================
+    def clear(self):
+        del self.lst_trans[:]
+        self.map_trans.clear()
 
 class TargetXmlFile:
     def __init__(self, xmlFile, sourceXmlFile):
         self.path = xmlFile.strip()
         self.source_xml_file = sourceXmlFile
+        self.lst_lines = []
+        if os.path.exists(self.path):
+            file_id = open(self.path, 'r')
+            if file_id:
+                self.lst_lines = file_id.readlines()
+                file_id.close()
 
     # =========================================================================
     # Function : parse
@@ -217,7 +324,7 @@ class TargetXmlFile:
         result = self.source_xml_file.generateEmptyXmlFile()
 
         # 加入更新内容
-        result = result + "    <!-- BSP: add by " + self.source_xml_file.trans_owner  +  "\n"
+        result = result + "    <!-- BSP: add by " + self.source_xml_file.trans_owner  +  " @{ -->\n"
         for line_text in self.source_xml_file.lst_trans:
             result = result + line_text
 
@@ -228,6 +335,22 @@ class TargetXmlFile:
 
         file_id.write(result)
         file_id.close()
+
+    # =========================================================================
+    # Function : mergeCustomContent
+    # Comment  : 合并owner不同位置的注释到最后一处owner位置
+    # =========================================================================
+    def mergeCustomContent(self):
+        # 文件内容为空, 不进行处理
+        if not self.lst_lines:
+            return
+
+        #owner = self.source_xml_file.trans_owner
+        #scan_state = TARGET_SCAN_STATE_NORMAL
+
+        #for lint_text in self.lst_lines:
+
+
 
     # =========================================================================
     # Function : updateTargetFile
@@ -241,77 +364,35 @@ class TargetXmlFile:
     #          : 
     # =========================================================================
     def updateTargetFile(self):
-        file_id = open(self.path, 'r')
-        line_text = ""
+        # 文件内容为空
+        if not self.lst_lines:
+            return
+
         result = ""
+        line_no = 0
+        scan_state = TARGET_SCAN_STATE_NORMAL
 
-        # 扫描状态
-        SCAN_STATE_NORMAL = 0
-        SCAN_STATE_PROPERTY = 1
-        SCAN_STATE_ARRAY = 2
-        SCAN_STATE_UPDATE = 3
-        SCAN_STATE_END = 4
-
-        # <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-        re_resource_start = re.compile(r'^\s*<resources\s+.*>\s*$')
-
-        # <!-- BSP: add by xxx @{ -->
-        # <!-- Product: add by xxx @{ -->
-        # <!-- Vision: add by xxx @{ -->
-        modify_start_pattern = r'\s*<!\-\-\s*(bsp|product|vision)\s*:\s*.*by\s+(\w+)\s+.*@\{\s*\-\->\s*$'
-        re_modify_start = re.compile(match_start_pattern, flags=re.IGNORECASE)
-
-        # <!-- BSP: @} --> or <!-- @} --> 
-        re_modify_end = re.compile(r'^\s*<!\-\-.*@\}\s*\-\->\s*$')
-
-        # 普通属性匹配
-        # <string name="status_bar_accessibility_dismiss_recents">Dismiss recent apps</string>
-        re_plain_property = re.compile(r'\s*\<\s*([\w\-]+)\s+name\s*="([^\"]+)".*</([\w\-]+)>\s*$')
-
-        # 数组属性
-        #<plurals name="status_bar_accessibility_recent_apps">
-        #    <item quantity="one">1 screen in Overview</item>
-        #    <item quantity="other">%d screens in Overview</item>
-        #</plurals>
-        re_match_array_begin = re.compile(r'^\s*<([\w\-]+)\s+name="([^"]+)\"[^/]?>\s*$')
-
-        # </plurals>
-        re_match_array_end = re.compile(r'^\s*</[^>]+\s*>\s*$')
-
-        # </resources>
-        re_resource_end = re.compile(r'^\s*</resources>\s*$')
-
-        scan_state = SCAN_STATE_NORMAL
-        while True:
-            line_text = file_id.readline()
-            if not line_text:
-                break
+        for line_text in self.lst_lines:
+            line_no = line_no + 1
 
             # 开始扫描，查找resource起始标记
-            if scan_state == SCAN_STATE_NORMAL: 
+            if scan_state == TARGET_SCAN_STATE_NORMAL: 
                 result = result + line_text
-                match = re_resource_start.search(line_text)
+                line_type, prop_name = parseCurLine(line_text)
 
-                if match:
-                    scan_state = SCAN_STATE_NORMAL
-                    break
+                if line_type == PROP_TYPE_CUSTOM_RESOURCE_START: 
+                    scan_state = TARGET_SCAN_STATE_PROPERTY 
+                    continue 
 
                 continue
 
             # 扫描元素部分内容
-            if scan_state == SCAN_STATE_PROPERTY:
-                # 更新部分起始位置匹配
-                match = re_modify_start.search(line_text)
-                if match:
-                    scan_state = SCAN_STATE_UPDATE
-                    result = result + line_text
-                    continue
+            if scan_state == TARGET_SCAN_STATE_PROPERTY:
+                line_type, prop_name = parseCurLine(line_text)
 
                 # 普通元素匹配
-                match = re_plain_property.search(line_text)
-                if match:
-                    prop_name = match.group(2)
-                    if prop_name in self.source_xml_file.map_trans:
+                if line_type == PROP_TYPE_PLAIN:
+                    if prop_name and prop_name in self.source_xml_file.map_trans:
                         self.source_xml_file.map_trans[prop_name] = "-1"
                         continue
                     else:
@@ -320,27 +401,55 @@ class TargetXmlFile:
                     continue
 
                 # 数组元素匹配
-                match = re_match_array_begin.search(line_text)
-                if match:
-                    scan_state = SCAN_STATE_ARRAY 
-                    array_name = match.group(2)
-                    if array_name in self.source_xml_file.map_trans:
-                        self.source_xml_file.map_trans[array_name] = "-1"
+                if line_type == PROP_TYPE_ARRAY_START:
+                    scan_state = TARGET_SCAN_STATE_ARRAY_NONE_UPDATE
+                    if prop_name in self.source_xml_file.map_trans:
+                        self.source_xml_file.map_trans[prop_name] = "-1"
                     else:
                         result = result + line_text
                     continue
 
+                # 更新部分起始位置匹配
+                if line_type == PROP_TYPE_CUSTOM_START:
+                    scan_state = TARGET_SCAN_STATE_UPDATE
+                    result = result + line_text
+                    continue
+
                 # </resources>匹配
-                match = re_resource_end.search(line_text) 
-                if match:
-                    scan_state = SCAN_STATE_END
+                if line_type == PROP_TYPE_CUSTOM_RESOURCE_END:
+                    scan_state = TARGET_SCAN_STATE_END
                     result = result + line_text
                     continue
 
                 # 其他情况
                 result = result + line_text
 
-        file_id.close()
+            # 扫描未修改数组内容
+            if scan_state == TARGET_SCAN_STATE_ARRAY_NONE_UPDATE:
+                result = result + line_text
+                line_type, prop_name = parseCurLine(line_text)
+
+                if line_type == PROP_TYPE_ARRAY_END:
+                    scan_state = TARGET_SCAN_STATE_PROPERTY
+                    continue
+
+                continue
+
+            # 更新部分内部扫描
+            if scan_state == TARGET_SCAN_STATE_UPDATE:
+                line_type, prop_name = parseCurLine(line_text)
+
+                if line_type == PROP_TYPE_CUSTOM_END:
+                    scan_state = TARGET_SCAN_STATE_PROPERTY
+                    continue
+
+                continue
+
+            # </resources>后面部分内容扫描
+            if scan_state == TARGET_SCAN_STATE_END:
+                result = result + line_text
+                continue
+        print(result)
 
 # =============================================================================
 # usage : 
@@ -367,14 +476,27 @@ python trans.py owner source_path target_path
     print("source path: " + source_path)
 
     target_path = sys.argv[3].strip()
-    if not os.path.exists(target_path):
-        print("new source path not found!")
-        exit()
+    #if not os.path.exists(target_path):
+    #    print("new source path not found!")
+    #    exit()
     print("target path: " + target_path)
 
     source_file = SourceXmlFile(source_path, owner)
     source_file.parse()
 
+    # =====================================================================
+    #result = ""
+    #for item in source_file.lst_trans:
+    #    result = result + item
+
+    #print(result)
+
+    #print("MMMMMMMMMMMMMM " + str(len(source_file.map_trans)))
+    #for prop_name in source_file.map_trans:
+    #    print("MMMMMM" + prop_name + " v: " + source_file.map_trans[prop_name])
+    # =====================================================================
+
     target_file = TargetXmlFile(target_path, source_file)
-    target_file.generateTargetFile()
+    #target_file.generateTargetFile()
+    target_file.updateTargetFile()
 
