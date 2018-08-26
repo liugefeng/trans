@@ -22,6 +22,7 @@
 # History    : 2018-08-18 Liu Gefeng   数组多行问题解决
 #            : 2018-08-18 Liu Gefeng   旧xml文件扫描功能开发完毕
 #            : 2018-08-23 Liu Gefeng   代码重构，将正则匹配和行类型内容转为全局变量
+#            : 2018-08-26 Liu Gefeng   合并当前用户修改代码功能完成
 # =========================================================================
 
 import sys
@@ -85,6 +86,7 @@ SOURCE_SCAN_STATE_ARRAY  = 2
 
 # target xml扫描状态
 # 0: 起始状态 1: 匹配属性状态 2: 匹配非修改属性状态
+# 3: 扫描到<!-- BSP: add by xxx @{ --> 4: 
 TARGET_SCAN_STATE_NORMAL = 0
 TARGET_SCAN_STATE_PROPERTY = 1
 TARGET_SCAN_STATE_ARRAY_NONE_UPDATE = 2
@@ -124,7 +126,8 @@ def parseCurLine(line_text):
     # <!--BSP: add by xxx @{ -->
     match = re_match_start.search(line_text)
     if match:
-        return PROP_TYPE_CUSTOM_START, ""
+        owner = match.group(2).strip()
+        return PROP_TYPE_CUSTOM_START, owner
 
     # 修改注释结束行
     # 如 <!-- BSP: @} -->
@@ -345,12 +348,68 @@ class TargetXmlFile:
         if not self.lst_lines:
             return
 
-        #owner = self.source_xml_file.trans_owner
-        #scan_state = TARGET_SCAN_STATE_NORMAL
+        owner = self.source_xml_file.trans_owner
+        scan_state = TARGET_SCAN_STATE_NORMAL
+        lst_tmp_lines = []
+        lst_custom_lines = []
 
-        #for lint_text in self.lst_lines:
+        for line_text in self.lst_lines:
+            # 初始状态，超找指定用户修改起始行
+            if scan_state == TARGET_SCAN_STATE_NORMAL:
+                line_type, owner_name = parseCurLine(line_text)
 
+                # <!-- BSP: add by xxx @{ -->
+                if line_type == PROP_TYPE_CUSTOM_START:
+                    # 指定用户的修改注释起始位置
+                    if owner_name == owner:
+                        scan_state = TARGET_SCAN_STATE_UPDATE
+                        if len(lst_custom_lines) > 0 and lst_custom_lines[-1].strip():
+                            lst_custom_lines.append("\n")
+                    # 非指定用户起始位置
+                    else:
+                        lst_tmp_lines.append(line_text)
+                # </resources>
+                elif line_type == PROP_TYPE_CUSTOM_RESOURCE_END:
+                    if lst_tmp_lines[-1].strip():
+                        lst_tmp_lines.append("\n")
 
+                    lst_tmp_lines.append("    <!-- BSP: add by " + self.source_xml_file.trans_owner + " @{ -->\n")
+                    lst_tmp_lines.extend(lst_custom_lines)
+                    lst_tmp_lines.append("    <!-- BSP: @} -->\n")
+                    lst_tmp_lines.append(line_text)
+                    del lst_custom_lines[:]
+
+                    test = ""
+                    for item in lst_tmp_lines:
+                        test = test + item
+                    print(test)
+
+                    scan_state = TARGET_SCAN_STATE_END
+                else:
+                    lst_tmp_lines.append(line_text)
+
+                continue
+
+            # 用户修改状态已匹配，搜集合并当前用户的修改属性
+            if scan_state == TARGET_SCAN_STATE_UPDATE:
+                line_type, owner_name = parseCurLine(line_text)
+
+                if line_type != PROP_TYPE_CUSTOM_END:
+                    lst_custom_lines.append(line_text)
+                    continue
+
+                scan_state = TARGET_SCAN_STATE_NORMAL
+                continue
+
+            # 已匹配到</resource> 
+            if scan_state == TARGET_SCAN_STATE_END:
+                lst_tmp_lines.append(line_text)
+                continue
+
+        del self.lst_lines[:]
+        self.lst_lines = lst_tmp_lines
+        del lst_tmp_lines[:]
+        return
 
     # =========================================================================
     # Function : updateTargetFile
@@ -368,16 +427,20 @@ class TargetXmlFile:
         if not self.lst_lines:
             return
 
-        result = ""
+        # 先合并当前用户修改项
+        self.mergeCustomContent()
+
         line_no = 0
         scan_state = TARGET_SCAN_STATE_NORMAL
+        lst_tmp_lines = []
+        cur_array_name = ""
 
         for line_text in self.lst_lines:
             line_no = line_no + 1
 
             # 开始扫描，查找resource起始标记
             if scan_state == TARGET_SCAN_STATE_NORMAL: 
-                result = result + line_text
+                lst_tmp_lines.append(line_text)
                 line_type, prop_name = parseCurLine(line_text)
 
                 if line_type == PROP_TYPE_CUSTOM_RESOURCE_START: 
@@ -386,7 +449,7 @@ class TargetXmlFile:
 
                 continue
 
-            # 扫描元素部分内容
+            # 扫描非当前用户修改元素部分内容 bsp/vision/product等注释对外面
             if scan_state == TARGET_SCAN_STATE_PROPERTY:
                 line_type, prop_name = parseCurLine(line_text)
 
@@ -396,37 +459,35 @@ class TargetXmlFile:
                         self.source_xml_file.map_trans[prop_name] = "-1"
                         continue
                     else:
-                        result = result + line_text
+                        lst_tmp_lines.append(line_text)
 
                     continue
 
                 # 数组元素匹配
                 if line_type == PROP_TYPE_ARRAY_START:
                     scan_state = TARGET_SCAN_STATE_ARRAY_NONE_UPDATE
+                    cur_array_name = prop_name
+
                     if prop_name in self.source_xml_file.map_trans:
                         self.source_xml_file.map_trans[prop_name] = "-1"
                     else:
-                        result = result + line_text
+                        lst_tmp_lines.append(line_text)
                     continue
 
-                # 更新部分起始位置匹配
+                # 更新起始位置匹配 <!-- BSP: add by xxx @{ -->
                 if line_type == PROP_TYPE_CUSTOM_START:
                     scan_state = TARGET_SCAN_STATE_UPDATE
-                    result = result + line_text
-                    continue
-
-                # </resources>匹配
-                if line_type == PROP_TYPE_CUSTOM_RESOURCE_END:
-                    scan_state = TARGET_SCAN_STATE_END
-                    result = result + line_text
+                    lst_tmp_lines.append(line_text)
                     continue
 
                 # 其他情况
-                result = result + line_text
+                lst_tmp_lines.append(line_text)
 
             # 扫描未修改数组内容
             if scan_state == TARGET_SCAN_STATE_ARRAY_NONE_UPDATE:
-                result = result + line_text
+                if not cur_array_name in self.souce_xml_file.map_trans:
+                    lst_tmp_lines.append(line_text)
+
                 line_type, prop_name = parseCurLine(line_text)
 
                 if line_type == PROP_TYPE_ARRAY_END:
@@ -447,9 +508,8 @@ class TargetXmlFile:
 
             # </resources>后面部分内容扫描
             if scan_state == TARGET_SCAN_STATE_END:
-                result = result + line_text
+                lst_tmp_lines.append(line_text)
                 continue
-        print(result)
 
 # =============================================================================
 # usage : 
@@ -476,27 +536,17 @@ python trans.py owner source_path target_path
     print("source path: " + source_path)
 
     target_path = sys.argv[3].strip()
-    #if not os.path.exists(target_path):
-    #    print("new source path not found!")
-    #    exit()
     print("target path: " + target_path)
 
     source_file = SourceXmlFile(source_path, owner)
     source_file.parse()
 
-    # =====================================================================
-    #result = ""
-    #for item in source_file.lst_trans:
-    #    result = result + item
-
-    #print(result)
-
-    #print("MMMMMMMMMMMMMM " + str(len(source_file.map_trans)))
-    #for prop_name in source_file.map_trans:
-    #    print("MMMMMM" + prop_name + " v: " + source_file.map_trans[prop_name])
-    # =====================================================================
-
     target_file = TargetXmlFile(target_path, source_file)
-    #target_file.generateTargetFile()
     target_file.updateTargetFile()
+
+    # =====================================================================
+    result = ""
+    for line_text in target_file.lst_lines:
+        result = result + line_text
+    print(result)
 
