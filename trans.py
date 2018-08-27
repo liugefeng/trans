@@ -88,10 +88,11 @@ SOURCE_SCAN_STATE_ARRAY  = 2
 # 0: 起始状态 1: 匹配属性状态 2: 匹配非修改属性状态
 # 3: 扫描到<!-- BSP: add by xxx @{ --> 4: 
 TARGET_SCAN_STATE_NORMAL = 0
-TARGET_SCAN_STATE_PROPERTY = 1
+TARGET_SCAN_STATE_RESOURCE_START = 1
 TARGET_SCAN_STATE_ARRAY_NONE_UPDATE = 2
-TARGET_SCAN_STATE_UPDATE = 3
-TARGET_SCAN_STATE_END = 4
+TARGET_SCAN_STATE_ARRAY_UPDATE = 3
+TARGET_SCAN_STATE_UPDATE = 4
+TARGET_SCAN_STATE_END = 5
 
 # =========================================================================
 # Function : parseCurLine
@@ -354,7 +355,7 @@ class TargetXmlFile:
         lst_custom_lines = []
 
         for line_text in self.lst_lines:
-            # 初始状态，超找指定用户修改起始行
+            # 初始状态，查找指定用户修改起始行
             if scan_state == TARGET_SCAN_STATE_NORMAL:
                 line_type, owner_name = parseCurLine(line_text)
 
@@ -435,6 +436,9 @@ class TargetXmlFile:
         lst_tmp_lines = []
         cur_array_name = ""
 
+        # 记录新平台中已有的更新
+        map_removed_index = {}
+
         for line_text in self.lst_lines:
             line_no = line_no + 1
 
@@ -444,19 +448,18 @@ class TargetXmlFile:
                 line_type, prop_name = parseCurLine(line_text)
 
                 if line_type == PROP_TYPE_CUSTOM_RESOURCE_START: 
-                    scan_state = TARGET_SCAN_STATE_PROPERTY 
+                    scan_state = TARGET_SCAN_STATE_RESOURCE_START 
                     continue 
 
                 continue
 
             # 扫描非当前用户修改元素部分内容 bsp/vision/product等注释对外面
-            if scan_state == TARGET_SCAN_STATE_PROPERTY:
+            if scan_state == TARGET_SCAN_STATE_RESOURCE_START:
                 line_type, prop_name = parseCurLine(line_text)
 
                 # 普通元素匹配
                 if line_type == PROP_TYPE_PLAIN:
                     if prop_name and prop_name in self.source_xml_file.map_trans:
-                        self.source_xml_file.map_trans[prop_name] = "-1"
                         continue
                     else:
                         lst_tmp_lines.append(line_text)
@@ -468,16 +471,20 @@ class TargetXmlFile:
                     scan_state = TARGET_SCAN_STATE_ARRAY_NONE_UPDATE
                     cur_array_name = prop_name
 
-                    if prop_name in self.source_xml_file.map_trans:
-                        self.source_xml_file.map_trans[prop_name] = "-1"
-                    else:
+                    if not prop_name in self.source_xml_file.map_trans:
                         lst_tmp_lines.append(line_text)
+
                     continue
 
                 # 更新起始位置匹配 <!-- BSP: add by xxx @{ -->
                 if line_type == PROP_TYPE_CUSTOM_START:
-                    scan_state = TARGET_SCAN_STATE_UPDATE
+                    owner_name = prop_name.strip()
                     lst_tmp_lines.append(line_text)
+
+                    if owner_name != self.source_xml_file.trans_owner:
+                        continue
+
+                    scan_state = TARGET_SCAN_STATE_UPDATE
                     continue
 
                 # 其他情况
@@ -491,7 +498,7 @@ class TargetXmlFile:
                 line_type, prop_name = parseCurLine(line_text)
 
                 if line_type == PROP_TYPE_ARRAY_END:
-                    scan_state = TARGET_SCAN_STATE_PROPERTY
+                    scan_state = TARGET_SCAN_STATE_RESOURCE_START
                     continue
 
                 continue
@@ -500,8 +507,33 @@ class TargetXmlFile:
             if scan_state == TARGET_SCAN_STATE_UPDATE:
                 line_type, prop_name = parseCurLine(line_text)
 
+                # 普通元素匹配
+                if line_type == PROP_TYPE_PLAIN:
+                    if prop_name and prop_name in self.source_xml_file.map_trans:
+                        cur_index = self.source_xml_file.map_trans[prop_name]
+                        if cur_index >= 0:
+                            map_removed_index[cur_index] = 1
+                        continue
+                    else:
+                        lst_tmp_lines.append(line_text)
+
+                # 数组元素匹配
+                #if line_type == PROP_TYPE_ARRAY_START:
+                #    scan_state = TARGET_SCAN_STATE_ARRAY_UPDATE
+                #    cur_array_name = prop_name
+
+                #    if prop_name and prop_name in self.source_xml_file.map_trans:
+                #        cur_index = self.source_xml_file.map_trans[prop_name]
+                #        if cur_index >= 0:
+                #            map_removed_index[cur_index] = 1
+                #        continue
+                #    else:
+                #        lst_tmp_lines.append(line_text)
+
+                #    continue
+
                 if line_type == PROP_TYPE_CUSTOM_END:
-                    scan_state = TARGET_SCAN_STATE_PROPERTY
+                    scan_state = TARGET_SCAN_STATE_RESOURCE_START
                     continue
 
                 continue
