@@ -74,7 +74,7 @@ match_start_pattern = r'^\s*<!\-\-\s*(bsp|product|vision)\s*:\s*.*by\s+(\w+)\s+.
 re_match_start = re.compile(match_start_pattern, flags=re.IGNORECASE)
 
 # <!-- BSP: @} --> or <!-- @} --> 
-re_match_end = re.compile(r'^\s*<!\-\-.*@\}\s*\-\->\s*$')
+re_match_end = re.compile(r'^\s*<!\-\-\s*(bsp|vision|product)\s*:\s*@\}\s*\-\->\s*$', flags=re.IGNORECASE)
 
 # 获取source xml属性更改内容扫描状态定义
 # 1: 当前正在查找匹配起始行 如：<!-- BSP: add by xxx @{ -->
@@ -347,14 +347,18 @@ class TargetXmlFile:
     def mergeCustomContent(self):
         # 文件内容为空, 不进行处理
         if not self.lst_lines:
+            print("no content to merge!")
             return
 
         owner = self.source_xml_file.trans_owner
         scan_state = TARGET_SCAN_STATE_NORMAL
         lst_tmp_lines = []
         lst_custom_lines = []
+        line_no = 0
 
         for line_text in self.lst_lines:
+            line_no = line_no + 1
+
             # 初始状态，查找指定用户修改起始行
             if scan_state == TARGET_SCAN_STATE_NORMAL:
                 line_type, owner_name = parseCurLine(line_text)
@@ -380,11 +384,6 @@ class TargetXmlFile:
                     lst_tmp_lines.append(line_text)
                     del lst_custom_lines[:]
 
-                    test = ""
-                    for item in lst_tmp_lines:
-                        test = test + item
-                    print(test)
-
                     scan_state = TARGET_SCAN_STATE_END
                 else:
                     lst_tmp_lines.append(line_text)
@@ -408,8 +407,9 @@ class TargetXmlFile:
                 continue
 
         del self.lst_lines[:]
-        self.lst_lines = lst_tmp_lines
-        del lst_tmp_lines[:]
+        for item in lst_tmp_lines:
+            self.lst_lines.append(item)
+
         return
 
     # =========================================================================
@@ -426,10 +426,20 @@ class TargetXmlFile:
     def updateTargetFile(self):
         # 文件内容为空
         if not self.lst_lines:
+            print("no content to update!")
             return
 
         # 先合并当前用户修改项
         self.mergeCustomContent()
+
+        # ============================================
+        result = ""
+        for item in self.lst_lines:
+            result = result + item
+        file_id = open("b", 'w')
+        file_id.write(result)
+        file_id.close()
+        # ============================================
 
         line_no = 0
         scan_state = TARGET_SCAN_STATE_NORMAL
@@ -460,24 +470,28 @@ class TargetXmlFile:
                 # 普通元素匹配
                 if line_type == PROP_TYPE_PLAIN:
                     if prop_name and prop_name in self.source_xml_file.map_trans:
+                        print("plain prop already exist line: " + str(line_no))
                         continue
                     else:
                         lst_tmp_lines.append(line_text)
+                        print("plain prop not exist line: " + str(line_no))
 
                     continue
 
                 # 数组元素匹配
                 if line_type == PROP_TYPE_ARRAY_START:
-                    scan_state = TARGET_SCAN_STATE_ARRAY_NONE_UPDATE
                     cur_array_name = prop_name
 
-                    if not prop_name in self.source_xml_file.map_trans:
+                    if prop_name and prop_name in self.source_xml_file.map_trans:
+                        scan_state = TARGET_SCAN_STATE_ARRAY_NONE_UPDATE
+                    else:
                         lst_tmp_lines.append(line_text)
 
                     continue
 
                 # 更新起始位置匹配 <!-- BSP: add by xxx @{ -->
                 if line_type == PROP_TYPE_CUSTOM_START:
+                    print("update start line: " + str(line_no))
                     owner_name = prop_name.strip()
                     lst_tmp_lines.append(line_text)
 
@@ -487,52 +501,62 @@ class TargetXmlFile:
                     scan_state = TARGET_SCAN_STATE_UPDATE
                     continue
 
+                # </resources>匹配
+                if line_type == PROP_TYPE_CUSTOM_RESOURCE_END:
+                    lst_tmp_lines.append(line_text)
+                    scan_state = TARGET_SCAN_STATE_END
+                    continue
+
                 # 其他情况
                 lst_tmp_lines.append(line_text)
 
             # 扫描未修改数组内容
             if scan_state == TARGET_SCAN_STATE_ARRAY_NONE_UPDATE:
-                if not cur_array_name in self.souce_xml_file.map_trans:
-                    lst_tmp_lines.append(line_text)
-
                 line_type, prop_name = parseCurLine(line_text)
 
                 if line_type == PROP_TYPE_ARRAY_END:
+                    print("array end: " + str(line_no))
                     scan_state = TARGET_SCAN_STATE_RESOURCE_START
                     continue
 
                 continue
 
-            # 更新部分内部扫描
+            # 更新部分内部扫描(与source文件中更新属性重复的保留target中的属性修改)
             if scan_state == TARGET_SCAN_STATE_UPDATE:
                 line_type, prop_name = parseCurLine(line_text)
 
                 # 普通元素匹配
                 if line_type == PROP_TYPE_PLAIN:
+                    lst_tmp_lines.append(line_text)
                     if prop_name and prop_name in self.source_xml_file.map_trans:
-                        cur_index = self.source_xml_file.map_trans[prop_name]
+                        cur_index = int(self.source_xml_file.map_trans[prop_name].strip())
                         if cur_index >= 0:
                             map_removed_index[cur_index] = 1
-                        continue
-                    else:
-                        lst_tmp_lines.append(line_text)
+                    continue
 
                 # 数组元素匹配
-                #if line_type == PROP_TYPE_ARRAY_START:
-                #    scan_state = TARGET_SCAN_STATE_ARRAY_UPDATE
-                #    cur_array_name = prop_name
+                if line_type == PROP_TYPE_ARRAY_START:
+                    lst_tmp_lines.append(line_text)
+                    cur_array_name = prop_name
 
-                #    if prop_name and prop_name in self.source_xml_file.map_trans:
-                #        cur_index = self.source_xml_file.map_trans[prop_name]
-                #        if cur_index >= 0:
-                #            map_removed_index[cur_index] = 1
-                #        continue
-                #    else:
-                #        lst_tmp_lines.append(line_text)
+                    if prop_name and prop_name in self.source_xml_file.map_trans:
+                        lst_index = self.source_xml_file.map_trans[prop_name].strip().split(",")
+                        start_index = int(lst_index[0].strip())
+                        end_index = int(lst_index[1].strip())
+                        for i in range(start_index, end_index+1):
+                            map_removed_index[i] = 1
 
-                #    continue
+                    continue
 
+                # 用户修改结束行匹配
                 if line_type == PROP_TYPE_CUSTOM_END:
+                    # 将source文件中的更新，加入到target文件中
+                    for item in self.source_xml_file.lst_trans:
+                        # source 文件中没有在target文件中已经更新的属性
+                        if not item in map_removed_index:
+                            lst_tmp_lines.append(item)
+
+                    lst_tmp_lines.append(line_text)
                     scan_state = TARGET_SCAN_STATE_RESOURCE_START
                     continue
 
@@ -542,6 +566,14 @@ class TargetXmlFile:
             if scan_state == TARGET_SCAN_STATE_END:
                 lst_tmp_lines.append(line_text)
                 continue
+
+        result = ""
+        for line_text in lst_tmp_lines:
+            result = result + line_text
+        file_id = open("c", 'w')
+        file_id.write(result)
+        file_id.close()
+
 
 # =============================================================================
 # usage : 
@@ -575,10 +607,4 @@ python trans.py owner source_path target_path
 
     target_file = TargetXmlFile(target_path, source_file)
     target_file.updateTargetFile()
-
-    # =====================================================================
-    result = ""
-    for line_text in target_file.lst_lines:
-        result = result + line_text
-    print(result)
 
