@@ -568,12 +568,16 @@ class TargetXmlFile:
                 continue
 
         result = ""
+        for item in map_removed_index.keys():
+            result = result + " " + str(item)
+        print("xxxxxx\n" + result + "\nyyyyyyyyyyyy\n")
+
+        result = ""
         for line_text in lst_tmp_lines:
             result = result + line_text
         file_id = open("c", 'w')
         file_id.write(result)
         file_id.close()
-
 
 # =============================================================================
 # usage : 
