@@ -13,9 +13,6 @@
 #            : 2. 针对新文件中没有的元素，则直接将旧xml文件中的内容加入到新xml
 #            : 3. 更新内容将同意放在文件中的同一个注释标记对中
 #            : 4. 针对新文件中已有修改内容，不能进行修改
-#            :
-# TODO       : 更新新xml文件功能尚未开发
-#            :
 # Note       : 目前搜集了用户修改属性在列表中的位置信息，目前尚未用到，以后可能
 #            : 会使用到，暂时保留该部分代码
 #            :
@@ -23,6 +20,8 @@
 #            : 2018-08-18 Liu Gefeng   旧xml文件扫描功能开发完毕
 #            : 2018-08-23 Liu Gefeng   代码重构，将正则匹配和行类型内容转为全局变量
 #            : 2018-08-26 Liu Gefeng   合并当前用户修改代码功能完成
+#            : 2018-08-30 Liu Gefeng   更新功能初步开发完毕
+#            : 2018-08-30 Liu Gefeng   注释问题处理
 # =========================================================================
 
 import sys
@@ -293,14 +292,6 @@ class SourceXmlFile:
             print("scan state error for scanning file " + self.path)
         return
 
-    # =========================================================================
-    # Function : clear
-    # Comment  : 清空数据
-    # =========================================================================
-    def clear(self):
-        del self.lst_trans[:]
-        self.map_trans.clear()
-
 class TargetXmlFile:
     def __init__(self, xmlFile, sourceXmlFile):
         self.path = xmlFile.strip()
@@ -431,15 +422,6 @@ class TargetXmlFile:
 
         # 先合并当前用户修改项
         self.mergeCustomContent()
-
-        # ============================================
-        result = ""
-        for item in self.lst_lines:
-            result = result + item
-        file_id = open("b", 'w')
-        file_id.write(result)
-        file_id.close()
-        # ============================================
 
         line_no = 0
         scan_state = TARGET_SCAN_STATE_NORMAL
