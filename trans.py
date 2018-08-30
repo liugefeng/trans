@@ -426,7 +426,7 @@ class TargetXmlFile:
     def updateTargetFile(self):
         # 文件内容为空
         if not self.lst_lines:
-            print("no content to update!")
+            self.generateTargetFile()
             return
 
         # 先合并当前用户修改项
@@ -470,11 +470,9 @@ class TargetXmlFile:
                 # 普通元素匹配
                 if line_type == PROP_TYPE_PLAIN:
                     if prop_name and prop_name in self.source_xml_file.map_trans:
-                        print("plain prop already exist line: " + str(line_no))
                         continue
                     else:
                         lst_tmp_lines.append(line_text)
-                        print("plain prop not exist line: " + str(line_no))
 
                     continue
 
@@ -491,7 +489,6 @@ class TargetXmlFile:
 
                 # 更新起始位置匹配 <!-- BSP: add by xxx @{ -->
                 if line_type == PROP_TYPE_CUSTOM_START:
-                    print("update start line: " + str(line_no))
                     owner_name = prop_name.strip()
                     lst_tmp_lines.append(line_text)
 
@@ -515,7 +512,6 @@ class TargetXmlFile:
                 line_type, prop_name = parseCurLine(line_text)
 
                 if line_type == PROP_TYPE_ARRAY_END:
-                    print("array end: " + str(line_no))
                     scan_state = TARGET_SCAN_STATE_RESOURCE_START
                     continue
 
@@ -524,6 +520,22 @@ class TargetXmlFile:
             # 更新部分内部扫描(与source文件中更新属性重复的保留target中的属性修改)
             if scan_state == TARGET_SCAN_STATE_UPDATE:
                 line_type, prop_name = parseCurLine(line_text)
+
+                # 用户修改结束行匹配
+                if line_type == PROP_TYPE_CUSTOM_END:
+                    # 将source文件中的更新，加入到target文件中
+                    cur_index = 0
+                    for item in self.source_xml_file.lst_trans:
+                        # source 文件中没有在target文件中已经更新的属性
+                        if not cur_index in map_removed_index:
+                            lst_tmp_lines.append(item)
+
+                        cur_index = cur_index + 1
+
+                    lst_tmp_lines.append(line_text)
+                    scan_state = TARGET_SCAN_STATE_RESOURCE_START
+
+                    continue
 
                 # 普通元素匹配
                 if line_type == PROP_TYPE_PLAIN:
@@ -548,29 +560,13 @@ class TargetXmlFile:
 
                     continue
 
-                # 用户修改结束行匹配
-                if line_type == PROP_TYPE_CUSTOM_END:
-                    # 将source文件中的更新，加入到target文件中
-                    for item in self.source_xml_file.lst_trans:
-                        # source 文件中没有在target文件中已经更新的属性
-                        if not item in map_removed_index:
-                            lst_tmp_lines.append(item)
-
-                    lst_tmp_lines.append(line_text)
-                    scan_state = TARGET_SCAN_STATE_RESOURCE_START
-                    continue
-
+                lst_tmp_lines.append(line_text)
                 continue
 
             # </resources>后面部分内容扫描
             if scan_state == TARGET_SCAN_STATE_END:
                 lst_tmp_lines.append(line_text)
                 continue
-
-        result = ""
-        for item in map_removed_index.keys():
-            result = result + " " + str(item)
-        print("xxxxxx\n" + result + "\nyyyyyyyyyyyy\n")
 
         result = ""
         for line_text in lst_tmp_lines:
