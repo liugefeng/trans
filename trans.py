@@ -45,6 +45,9 @@ PROP_TYPE_CUSTOM_START = 5
 PROP_TYPE_CUSTOM_END = 6
 PROP_TYPE_CUSTOM_RESOURCE_START = 7
 PROP_TYPE_CUSTOM_RESOURCE_END = 8
+PROP_TYPE_COMMENT_SINGLE_LINE = 9
+PROP_TYPE_COMMENT_MULTI_LINE_START = 10
+PROP_TYPE_COMMENT_MULTI_LINE_END = 11
 
 # 普通属性匹配
 # <string name="status_bar_accessibility_dismiss_recents">Dismiss recent apps</string>
@@ -69,19 +72,29 @@ re_resource_end = re.compile(r'^\s*</resources>\s*$')
 # <!-- BSP: add by xxx @{ -->
 # <!-- Product: add by xxx @{ -->
 # <!-- Vision: add by xxx @{ -->
-match_start_pattern = r'^\s*<!\-\-\s*(bsp|product|vision)\s*:\s*.*by\s+(\w+)\s+.*@\{\s*\-\->\s*$'
-re_match_start = re.compile(match_start_pattern, flags=re.IGNORECASE)
+update_start_pattern = r'^\s*<!\-\-\s*(bsp|product|vision)\s*:\s*.*by\s+(\w+)\s+.*@\{\s*\-\->\s*$'
+re_update_start = re.compile(update_start_pattern, flags=re.IGNORECASE)
 
 # <!-- BSP: @} --> or <!-- @} --> 
-re_match_end = re.compile(r'^\s*<!\-\-\s*(bsp|vision|product)\s*:\s*@\}\s*\-\->\s*$', flags=re.IGNORECASE)
+re_update_end = re.compile(r'^\s*<!\-\-\s*(bsp|vision|product)\s*:\s*@\}\s*\-\->\s*$', flags=re.IGNORECASE)
+
+# 当前行包括注释行起始 <!-- xxxxxxxx
+re_comment_start = re.compile(r'^\s*<!\-\-.*$')
+
+# 当前行包括注释行结束 xxxxx -->
+re_comment_end = re.compile(r'^.*\-\->\s*$')
+
+# 单行注释 <!-- xxxxx -->
+re_sinle_line_comment = re.compile(r'\s*<!\-\-.*\-\->\s*$');
 
 # 获取source xml属性更改内容扫描状态定义
 # 1: 当前正在查找匹配起始行 如：<!-- BSP: add by xxx @{ -->
 # 2: 当前正在搜集用户修改属性行并查找匹配结束行 如：<!-- BSP: @} -->
 # 3: 当前正在搜集用户属性信息，遇到当前为数组的需要进行多行处理情况
 SOURCE_SCAN_STATE_NORMAL = 0
-SOURCE_SCAN_STATE_MINE   = 1
+SOURCE_SCAN_STATE_UPDATE   = 1
 SOURCE_SCAN_STATE_ARRAY  = 2
+SOURCE_SCAN_STATE_MULTILINE_COMMENT = 3
 
 # target xml扫描状态
 # 0: 起始状态 1: 匹配属性状态 2: 匹配非修改属性状态
@@ -124,16 +137,31 @@ def parseCurLine(line_text):
 
     # 修改注释起始行
     # <!--BSP: add by xxx @{ -->
-    match = re_match_start.search(line_text)
+    match = re_update_start.search(line_text)
     if match:
         owner = match.group(2).strip()
         return PROP_TYPE_CUSTOM_START, owner
 
     # 修改注释结束行
     # 如 <!-- BSP: @} -->
-    match = re_match_end.search(line_text)
+    match = re_update_end.search(line_text)
     if match:
         return PROP_TYPE_CUSTOM_END, ""
+
+    # 单行注释
+    match = re_sinle_line_comment.search(line_text)
+    if match:
+        return PROP_TYPE_COMMENT_SINGLE_LINE, ""
+
+    # 多行注释起始行
+    match = re_comment_start.search(line_text)
+    if match:
+        return PROP_TYPE_COMMENT_MULTI_LINE_START, ""
+
+    # 多行注释结束行
+    match = re_comment_end.search(line_text)
+    if match:
+        return PROP_TYPE_COMMENT_MULTI_LINE_END, ""
 
     # <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     match = re_resource_start.search(line_text)
@@ -214,32 +242,35 @@ class SourceXmlFile:
             if scan_state == SOURCE_SCAN_STATE_NORMAL:
                 line_type, prop_name = parseCurLine(line_text)
                 if line_type == PROP_TYPE_CUSTOM_START: 
-                    # 多个修改段落之间用空格隔开
-                    if len(self.lst_trans) > 0:
-                        self.lst_trans.append("\n")
-
-                    if last_scan_state != scan_state:
-                        last_scan_state = scan_state
-
-                    scan_state = SOURCE_SCAN_STATE_MINE
+                    scan_state = SOURCE_SCAN_STATE_UPDATE
                     continue
 
                 continue
 
             # 当前状态为已经匹配到翻译字符串起始位置，记录当前翻译串
             # 匹配到<!-- BSP: @} --> 结束
-            if scan_state == SOURCE_SCAN_STATE_MINE:
+            if scan_state == SOURCE_SCAN_STATE_UPDATE:
+                # 空行处理
+                if not line_text.strip():
+                    continue
+
                 line_type, prop_name = parseCurLine(line_text)
 
                 # 找到匹配结束，则重新进入NORMAL状态
                 if line_type == PROP_TYPE_CUSTOM_END: 
-                    if last_scan_state != scan_state:
-                        last_scan_state = scan_state
-
                     scan_state = SOURCE_SCAN_STATE_NORMAL
                     continue
 
-                self.lst_trans.append(line_text) 
+                # 普通注释行
+                if line_type == PROP_TYPE_COMMENT_SINGLE_LINE:
+                    continue
+
+                # 多行注释起始行
+                if line_type == PROP_TYPE_COMMENT_MULTI_LINE_START:
+                    scan_state = SOURCE_SCAN_STATE_MULTILINE_COMMENT
+                    continue
+
+                self.lst_trans.append(line_text)
 
                 # 当前行为普通元素
                 if line_type == PROP_TYPE_PLAIN:
@@ -263,9 +294,6 @@ class SourceXmlFile:
                     if not prop_name in self.map_trans:
                         cur_array_name = prop_name
 
-                        if last_scan_state != scan_state:
-                            last_scan_state = scan_state
-
                         scan_state = SOURCE_SCAN_STATE_ARRAY
                         self.map_trans[prop_name] = str(len(self.lst_trans) - 1)
                     else:
@@ -274,22 +302,33 @@ class SourceXmlFile:
 
             # 搜集数组元素，并查找数组结束行
             if scan_state == SOURCE_SCAN_STATE_ARRAY:
+                if not line_text.strip():
+                    continue
+
                 line_type, prop_name = parseCurLine(line_text)
                 self.lst_trans.append(line_text)
 
                 if line_type != PROP_TYPE_ARRAY_END:
                     continue
 
-                last_scan_state, scan_state = scan_state, last_scan_state 
-
+                scan_state = SOURCE_SCAN_STATE_UPDATE
                 if cur_array_name and cur_array_name in self.map_trans:
                     self.map_trans[cur_array_name] = self.map_trans[cur_array_name] + "," + str(len(self.lst_trans) - 1)
                     cur_array_name = ""
 
                 continue
 
+            # 多行注释处理
+            if scan_state == SOURCE_SCAN_STATE_MULTILINE_COMMENT:
+                line_type, prop_name = parseCurLine(line_text)
+
+                if line_type == PROP_TYPE_COMMENT_MULTI_LINE_END:
+                    scan_state = SOURCE_SCAN_STATE_UPDATE
+
+                continue
+
         if scan_state != SOURCE_SCAN_STATE_NORMAL:
-            print("scan state error for scanning file " + self.path)
+            print("scan state error for scanning file " + self.path + " with state: " + str(scan_state))
         return
 
 class TargetXmlFile:
