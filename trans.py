@@ -589,10 +589,11 @@ class TargetXmlFile:
                 lst_tmp_lines.append(line_text)
                 continue
 
+        os.system("rm -rf " + self.path)
         result = ""
         for line_text in lst_tmp_lines:
             result = result + line_text
-        file_id = open("c", 'w')
+        file_id = open(self.path, 'w')
         file_id.write(result)
         file_id.close()
 
@@ -616,7 +617,7 @@ python trans.py owner source_path target_path
 
     source_path = sys.argv[2].strip()
     if not os.path.exists(source_path):
-        print("old source path not found!")
+        print("path " + source_path + "  not found!")
         exit()
     print("source path: " + source_path)
 
