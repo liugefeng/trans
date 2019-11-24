@@ -1,7 +1,7 @@
 # coding: UTF-8
 
 # =========================================================================
-# File Name  : trans.py
+# File Name  : translate_modifier.py
 # Author     : 刘戈峰
 # Create Date: 2018-08-19
 # Platform   : Linux/Windows
