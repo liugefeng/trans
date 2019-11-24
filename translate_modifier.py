@@ -80,6 +80,7 @@ class XmlFile:
         # generate new config file
         file_id = open(self.xml_file + "_temp", "w")
         file_id.write(result)
+        file_id.close()
 
 class CfgFileManager:
     def __init__(self, config_file):
@@ -94,7 +95,6 @@ class CfgFileManager:
     def scan_cfg_files(self):
         # get xml files
         lst_files = self.cg.sections()
-        print(lst_files)
 
         for item in lst_files:
             xml_file = XmlFile(item)
