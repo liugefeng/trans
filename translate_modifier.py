@@ -14,6 +14,13 @@ import re
 import os.path
 import configparser
 
+class MyConfigParser(configparser.ConfigParser):
+    def __init__(self, defaults=None):
+        configparser.ConfigParser.__init__(self, defaults=None)
+
+    def optionxform(self, optionstr):
+        return optionstr;
+
 class XmlFile:
     def __init__(self, xml_file):
         self.xml_file = xml_file
@@ -33,7 +40,7 @@ class XmlFile:
 
         return result
 
-    def scan(self):
+    def update(self):
         if not os.path.exists(self.xml_file):
             print("file " + self.xml_file + " not exits!")
             sys.exit()
@@ -52,24 +59,27 @@ class XmlFile:
             match = re_str.search(line_text)
             if not match:
                 # for </resources>
-                sub_march = re_resource_end.search(line_text)
-                if sub_march:
+                res_march = re_resource_end.search(line_text)
+                if res_march:
                     result = result + self.generate_custom_str();
 
                 result = result + line_text
-
                 line_text = file_id.readline()
                 continue
 
-            name = match.group(1);
+            name = match.group(1).strip();
             if name in self.map_strs.keys():
-                line_text = self.file_id.readline()
-                continue
-            else: 
-                result = result + line_text
                 line_text = file_id.readline()
+                continue
+
+            result = result + line_text
+            line_text = file_id.readline()
 
         file_id.close()
+
+        # generate new config file
+        file_id = open(self.xml_file + "_temp", "w")
+        file_id.write(result)
 
 class CfgFileManager:
     def __init__(self, config_file):
@@ -77,7 +87,7 @@ class CfgFileManager:
             print("config file " + config_file + " not exists!")
             sys.exit()
 
-        self.cg = configparser.ConfigParser()
+        self.cg = MyConfigParser()
         self.cg.read(config_file, encoding='utf-8')
         self.lst_xml_files = []
 
@@ -102,5 +112,5 @@ if __name__ == "__main__":
     config_file.scan_cfg_files()
 
     for item in config_file.lst_xml_files:
-        item.scan()
+        item.update()
 
