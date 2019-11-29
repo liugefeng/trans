@@ -21,22 +21,107 @@ class MyConfigParser(configparser.ConfigParser):
     def optionxform(self, optionstr):
         return optionstr;
 
+class CfgFile:
+    def __init__(self, name):
+        if not os.path.exists(name):
+            print("config file " + name + " not exits!")
+            sys.exit();
+
+        self.file_id = open(name, 'r', errors = "ignore")
+        self.lst_symbols = []
+        self.map_symbols = {}
+        self.lst_xml_files = {}
+
+    def scan(self):
+        # SYMBOLS_FILE(symbols.xml);
+        re_symbols = re.compile(r'^\s*SYMBOLS_FILE\s*\(([^\)]+)\)\s*;\s*$')
+
+        # STRING_FILE(strings.xml);
+        re_string_file = re.compile(r'^\s*STRING_FILE\s*\(([^\)]+)\)\s*;\s*$')
+
+        # ConfigItem(byteShort, transtest1);
+        re_config_item = re.compile(r'^\s*ConfigItem\s*\(([^,]+),([^\)]+)\)\s*;\s*$')
+
+        # scan state const
+        SCAN_STATE_START = 0
+        SCAN_STATE_STRING_FILE = 1
+        SCAN_STATE_STRING_ITEM = 2
+
+        scan_state = SCAN_STATE_START
+        line_text = self.file_id.readline()
+        line_no = 0
+        xml_file = None
+        while line_text:
+            line_no = line_no + 1
+
+            # SYMBOLS_FILE(symbols.xml);
+            if scan_state == SCAN_STATE_START:
+                result = re_symbols.search(line_text)
+                if result:
+                    symbol_str = result.group(1).strip()
+                    scan_state = SCAN_STATE_STRING_FILE
+                    self.lst_xml_files = symbol_str.split(',')
+                    #print(self.lst_xml_files)
+
+                line_text = self.file_id.readline()
+                continue
+
+            # STRING_FILE(strings.xml);
+            if scan_state == SCAN_STATE_STRING_FILE:
+                result = re_string_file.search(line_text)
+                if result:
+                    name = result.group(1).strip()
+                    if not os.path.exists(name):
+                        print("xml file " + name + " not exits on line " + str(line_no))
+                        line_text = self.file_id.readline()
+                        continue
+
+                    xml_file = XmlFile(name)
+                    self.lst_xml_files.append(xml_file)
+                    scan_state = SCAN_STATE_STRING_ITEM
+
+                line_text = self.file_id.readline()
+                continue
+
+            # ConfigItem(byteShort, transtest1);
+            if scan_state == SCAN_STATE_STRING_ITEM:
+                result = re_config_item.search(line_text)
+                if result:
+                    name = result.group(1).strip()
+                    value = result.group(2).strip()
+                    self.lst_xml_files[-1].set_data(name, value)
+                    print(name + ":" + value)
+                    line_text = self.file_id.readline()
+                    continue
+
+                result = re_string_file.search(line_text)
+                if result:
+                    scan_state = SCAN_STATE_STRING_FILE
+                    line_no = line_no - 1
+                    # line_text = self.file_id.readline()
+                    continue
+
+                line_text = self.file_id.readline()
+                continue
+
+        print(scan_state)
+        self.file_id.close()
+
 class XmlFile:
     def __init__(self, xml_file):
         self.xml_file = xml_file
         self.lst_strs = []
         self.map_strs = {}
 
-    def set_data(self, lst_strs):
-        self.lst_strs = lst_strs
-        for item,value in lst_strs:
-            if not item in self.map_strs.keys():
-                self.map_strs[item] = 1
+    def set_data(self, str, value):
+        if not str in self.lst_strs:
+            self.lst_strs.append(str)
+            self.map_strs[str] = value
 
     def generate_custom_str(self):
         result = ""
-        for str, value in self.lst_strs:
-            result = result + '    <string name="' + str +'">' + value + '</string>\n'
+        for str in self.lst_strs:
+            result = result + '    <string name="' + str +'">' + self.map_strs[str] + '</string>\n'
 
         return result
 
@@ -82,35 +167,11 @@ class XmlFile:
         file_id.write(result)
         file_id.close()
 
-class CfgFileManager:
-    def __init__(self, config_file):
-        if not os.path.exists(config_file):
-            print("config file " + config_file + " not exists!")
-            sys.exit()
-
-        self.cg = MyConfigParser()
-        self.cg.read(config_file, encoding='utf-8')
-        self.lst_xml_files = []
-
-    def scan_cfg_files(self):
-        # get xml files
-        lst_files = self.cg.sections()
-
-        for item in lst_files:
-            xml_file = XmlFile(item)
-            lst_strs = self.cg.items(item)
-            xml_file.set_data(lst_strs)
-
-            self.lst_xml_files.append(xml_file)
-
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("no xml file found.")
         sys.exit()
 
-    config_file = CfgFileManager(sys.argv[1])
-    config_file.scan_cfg_files()
-
-    for item in config_file.lst_xml_files:
-        item.update()
+    cfg_file = CfgFile(sys.argv[1])
+    cfg_file.scan()
 
