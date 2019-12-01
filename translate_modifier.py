@@ -28,9 +28,9 @@ class CfgFile:
             sys.exit();
 
         self.file_id = open(name, 'r', errors = "ignore")
-        self.lst_symbols = []
+        self.lst_symbols_file = []
         self.map_symbols = {}
-        self.lst_xml_files = {}
+        self.lst_xml_files = []
 
     def scan(self):
         # SYMBOLS_FILE(symbols.xml);
@@ -51,6 +51,7 @@ class CfgFile:
         line_text = self.file_id.readline()
         line_no = 0
         xml_file = None
+
         while line_text:
             line_no = line_no + 1
 
@@ -60,8 +61,9 @@ class CfgFile:
                 if result:
                     symbol_str = result.group(1).strip()
                     scan_state = SCAN_STATE_STRING_FILE
-                    self.lst_xml_files = symbol_str.split(',')
-                    #print(self.lst_xml_files)
+                    self.lst_symbols_file = symbol_str.split(',')
+                    print("symbols file: ")
+                    print(self.lst_symbols_file)
 
                 line_text = self.file_id.readline()
                 continue
@@ -72,11 +74,11 @@ class CfgFile:
                 if result:
                     name = result.group(1).strip()
                     if not os.path.exists(name):
-                        print("xml file " + name + " not exits on line " + str(line_no))
-                        line_text = self.file_id.readline()
-                        continue
+                        print("Error: xml file " + name + " not exits on line " + str(line_no))
+                        sys.exit()
 
                     xml_file = XmlFile(name)
+                    print("\nxml file: " + name)
                     self.lst_xml_files.append(xml_file)
                     scan_state = SCAN_STATE_STRING_ITEM
 
@@ -104,8 +106,41 @@ class CfgFile:
                 line_text = self.file_id.readline()
                 continue
 
-        print(scan_state)
         self.file_id.close()
+
+    # get string in symbols.xml
+    def scan_symbols(self):
+        # <java-symbol type="string" name="config_ims_package" />
+        re_string = re.compile(r'^\s*<java\-symbol\s+type\s*=\s*\"string\"\s+name\s*=\s*\"([^"]+)\"\s+/>\s*$')
+
+        for item in self.lst_symbols_file:
+            item = item.strip()
+            if not os.path.exists(item):
+                print("Error: symbols file " + item + " not exits!")
+                sys.exit()
+
+            print("scanning config file: " + item)
+            file_id = open(item, 'r', errors='ignore')
+            line_text = file_id.readline()
+            line_no = 0
+
+            while line_text:
+                line_no = line_no + 1
+
+                result = re_string.search(line_text)
+                if result:
+                    name = result.group(1).strip()
+                    if not name in self.map_symbols.keys():
+                        self.map_symbols[name] = 1
+                        #print("line no: " + str(line_no) + " string: " + name)
+
+                line_text = file_id.readline()
+
+            file_id.close()
+
+    def update(self):
+        for item in self.lst_xml_files:
+            item.update()
 
 class XmlFile:
     def __init__(self, xml_file):
@@ -125,6 +160,7 @@ class XmlFile:
 
         return result
 
+    # update strings.xml
     def update(self):
         if not os.path.exists(self.xml_file):
             print("file " + self.xml_file + " not exits!")
@@ -146,7 +182,7 @@ class XmlFile:
                 # for </resources>
                 res_march = re_resource_end.search(line_text)
                 if res_march:
-                    result = result + self.generate_custom_str();
+                    result = result + "\n" + self.generate_custom_str();
 
                 result = result + line_text
                 line_text = file_id.readline()
@@ -174,4 +210,7 @@ if __name__ == "__main__":
 
     cfg_file = CfgFile(sys.argv[1])
     cfg_file.scan()
+    cfg_file.scan_symbols()
+    cfg_file.update()
+
 
